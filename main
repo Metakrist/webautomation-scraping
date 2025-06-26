@@ -1,0 +1,171 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support import expected_conditions as EC
+import pandas as pd
+from bs4 import BeautifulSoup as soup
+from datetime import datetime
+import time
+from openpyxl import load_workbook
+import os
+
+# Utility to print markdown in notebook
+from IPython.display import Markdown, display
+def printmd(string, color=None):
+    colorstr = "<span style='color:{}'>{}</span>".format(color, string)
+    display(Markdown(colorstr))
+
+# Example start/end datetime (in actual use, load dynamically or as input)
+start_date = '2025-06-25 00:00:00'
+end_date = '2025-06-25 23:59:59'
+
+st_dt_cnv = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
+ed_dt_cnv = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
+ed_dt_adj = ed_dt_cnv + pd.Timedelta('1 s')
+today = datetime.today()
+
+start_day = st_dt_cnv.day
+end_day = ed_dt_adj.day
+day_today = today.day
+
+wkdy = {0:"Monday",1:"Tuesday",2:"Wednesday",3:"Thursday",4:"Friday",5:"Saturday",6:"Sunday"}
+s_day = st_dt_cnv.weekday()
+e_day = ed_dt_adj.weekday()
+
+print("Start Day: " + wkdy[s_day])
+print("End Day: " + wkdy[e_day])
+
+if e_day in range(0,5) and day_today == end_day:
+    e_dt = f'//td[@class="available today"]//span[contains(text(),"{end_day}")]'
+else:
+    e_dt = f'//td[@class="available"]//span[contains(text(),"{end_day}")]'
+print(e_dt)
+
+# Selenium Chrome Options
+chromeOptions = webdriver.ChromeOptions()
+prefs = {'profile.default_content_setting_values.images': 2}
+chromeOptions.add_experimental_option("prefs", prefs)
+# chromeOptions.add_argument("--headless")  # Optional: run in background
+# chromeOptions.add_argument("--proxy-server=socks5://127.0.0.1:1080")  # Remove or mask proxy
+d = webdriver.Chrome(options=chromeOptions)
+wait = WebDriverWait(d, 120)
+
+# Placeholder: Replace with your actual login URL and credentials
+login_url = "https://example.com"
+username = "your_username"
+password = "your_password"
+
+try:
+    d.get(login_url)
+except:
+    pass
+
+def login():
+    print('Logging in...')
+    unm = wait.until(EC.element_to_be_clickable((By.XPATH, '(//input[@class="el-input__inner"])[1]')))
+    unm.clear()
+    unm.send_keys(username)
+    pwd = d.find_element(By.XPATH, '(//input[@class="el-input__inner"])[2]')
+    pwd.clear()
+    pwd.send_keys(password)
+    login_btn = d.find_element(By.XPATH, '//button[@class="el-button submit"]')
+    login_btn.click()
+    time.sleep(1)
+
+def gotoDailyReport():
+    report = wait.until(EC.element_to_be_clickable((By.XPATH, '(//div[@class="el-sub-menu__title"])[1]')))
+    report.click()
+    d.find_element(By.XPATH, '(//div[@class="el-sub-menu__title"])[2]').click()
+    d.find_element(By.XPATH, '//a[@href="/report/winLossSummaryReport"]').click()
+
+def setStartDate():
+    d.find_element(By.XPATH, '//input[@placeholder="Start"]').click()
+    sday_xp = f'//td[@class="available"]//span[contains(text(),"{start_day}")]'
+    d.find_element(By.XPATH, sday_xp).click()
+
+def setEndDate():
+    d.find_element(By.XPATH, '//input[@placeholder="End"]').click()
+    d.find_element(By.XPATH, e_dt).click()
+    d.find_element(By.XPATH, '(//button[@class="el-button el-button--small is-plain el-picker-panel__link-btn"])[1]').click()
+
+def selectCurrency():
+    d.find_element(By.XPATH, '(//input[@class="el-input__inner"])[5]').click()
+    d.find_element(By.XPATH, '//span[contains(text(),"PTV")]').click()
+
+def submitBtn():
+    d.find_element(By.XPATH, '//button[@class="el-button btn--s btn--gold"]').click()
+
+login()
+gotoDailyReport()
+setStartDate()
+setEndDate()
+selectCurrency()
+submitBtn()
+
+def extract():
+    time.sleep(5)
+    print('Extracting table...')
+    soup1 = soup(d.page_source, 'html.parser')
+    data = []
+    table = soup1.find_all('div', id='dataTable')
+    for row in table[0]:
+        cols = row.find_all('td')
+        cols = [ele.text.strip() for ele in cols]
+        data.append(cols)
+    return data
+
+data = extract()
+
+def clean_num(val):
+    if not val:
+        return 0
+    val = val.replace(',', '').replace('(', '-').replace(')', '')
+    try:
+        return float(val)
+    except:
+        return 0
+
+bet_amount_total = 0
+pl_company_total = 0
+
+for row in data:
+    if len(row) < 24:
+        continue
+    bet_amount_total += clean_num(row[5])
+    pl_company_total += clean_num(row[-1])
+
+print(f"Total Bet Amount: {bet_amount_total:,.2f}")
+print(f"Total P/L (Company): {pl_company_total:,.2f}")
+printmd(f"**Bet:** {bet_amount_total}", color="GREEN")
+printmd(f"**Payout:** {pl_company_total}", color="GREEN")
+
+# --- Save to Excel (optional: update with your own path/row mapping logic) ---
+
+output_path = "output/bet_summary.xlsx"
+row = 10  # example row
+
+if not os.path.exists(os.path.dirname(output_path)):
+    os.makedirs(os.path.dirname(output_path))
+
+book = load_workbook(output_path)
+WB = book['ALL']
+
+bcell = "E" + str(row)
+pocell = "I" + str(row)
+bdiff = "H" + str(row)
+podiff = "L" + str(row)
+bstagingcell = "G" + str(row)
+postagingcell = "K" + str(row)
+
+bdiff_cell = f"={bcell}-F{row}-{bstagingcell}"
+podiff_cell = f"={pocell}+J{row}-{postagingcell}"
+
+WB[bcell] = bet_amount_total
+WB[pocell] = pl_company_total
+WB[bdiff] = bdiff_cell
+WB[podiff] = podiff_cell
+
+book.save(output_path)
+book.close()
+d.quit()
